@@ -9,28 +9,28 @@ status: validated   # decode + API server verified on real hardware
 # Running a 230B model on a pod that can't hold it
 
 MiniMax-M2.7 is a 230-billion-parameter mixture-of-experts model: 256 experts, top-8
-routing, 62 layers, ~10B parameters active per token. In `float16` the weights are
-about **460 GB**.
+routing, 62 layers, ~10B parameters active per token. In `float16` the weights are about
+**460 GB**.
 
-I wanted to run it on a **TPU v5e-64** — a pod of 16 hosts, each with 4 chips. The
+The target hardware was a **TPU v5e-64** — a pod of 16 hosts, each with 4 chips. The
 catch: each v5e host has only **~188 GB of RAM**. The standard MaxText inference path
-loads the *full* checkpoint into host memory on *every* host and lets the runtime shard
-it onto the chips. On v5e that means 16 hosts each trying to hold 460 GB in 188 GB of
-RAM. It doesn't fit. It isn't close.
+loads the *full* checkpoint into host memory on *every* host and lets the runtime shard it
+onto the chips. On v5e that means 16 hosts each trying to hold 460 GB in 188 GB of RAM. It
+doesn't fit. It isn't close.
 
 The naive workaround — replicate the checkpoint to every host's local disk — needs
 `460 GB × 16 = 7.4 TB` of storage moving across the pod, and on a RAM-backed scratch FS
-(which is what you use on TPU hosts) you simply don't have it. There was also a harder
-constraint behind all of this: a previous project had run up a **~$1,800 cross-region
-GCS bill** by moving checkpoints between a US VM and a European bucket. The rule since
-then has been absolute: **zero outbound bytes per host**, everything stays in-region,
-nothing gets replicated that doesn't have to be.
+(which is what you use on TPU hosts) that storage doesn't exist. There was also a harder
+constraint behind all of this: a previous project had run up a **~$1,800 cross-region GCS
+bill** by moving checkpoints between a US VM and a European bucket. The rule since then has
+been absolute: **zero outbound bytes per host**, everything stays in-region, nothing gets
+replicated that doesn't have to be.
 
 So the requirement crystallized into something specific:
 
-> Each host should hold **only the slices of the model its own 4 chips will actually
-> own at decode time** — nothing more — and it should fetch those slices by streaming
-> from HuggingFace once, never from another host or another region.
+> Each host should hold **only the slices of the model its own 4 chips will actually own at
+> decode time** — nothing more — and it should fetch those slices by streaming from
+> HuggingFace once, never from another host or another region.
 
 This post is how that works. The punchline up front: each host ends up storing **~27–30
 GB** instead of 460 GB, the pod-wide footprint drops from 7.4 TB to **~432 GB**, and the
@@ -40,11 +40,11 @@ model decodes correctly and fast (**6,678 tok/s** on v6e-64).
 
 ## The key insight: the engine already knows the sharding
 
-Here's the thing that makes the whole approach clean. When MaxText builds its inference
-engine, it computes a **sharding for every parameter** — a `jax.sharding.Sharding` that
-says exactly how each weight tensor is split across the device mesh. That information
-exists *before* any weights are loaded. You can ask for it against an *abstract* state
-(shapes and dtypes only, no actual arrays), so getting it costs nothing.
+Here is the observation that makes the whole approach clean. When MaxText builds its
+inference engine, it computes a **sharding for every parameter** — a
+`jax.sharding.Sharding` that says exactly how each weight tensor is split across the device
+mesh. That information exists *before* any weights are loaded. You can ask for it against an
+*abstract* state (shapes and dtypes only, no actual arrays), so getting it costs nothing.
 
 ```python
 def maxtext_pyconfig_and_shardings(model_size, extra_args):
@@ -67,8 +67,8 @@ def maxtext_pyconfig_and_shardings(model_size, extra_args):
     return engine._mesh, state_mesh_shardings.params
 ```
 
-Once I have that sharding tree, the rest is bookkeeping. For each parameter leaf, JAX
-will tell me **which slice of the global tensor each device owns**:
+Once that sharding tree is in hand, the rest is bookkeeping. For each parameter leaf, JAX
+reports **which slice of the global tensor each device owns**:
 
 ```python
 addr = sharding.addressable_devices_indices_map(global_shape)
@@ -76,9 +76,9 @@ addr = sharding.addressable_devices_indices_map(global_shape)
 ```
 
 The critical word is **addressable**. Run this inside a `jax.distributed` job and each
-process only sees its *local* devices in that map. So if I run **one converter process
-per host**, process `p` is told precisely the slices its 4 chips need — and nothing about
-any other host's slices. That's the entire trick: the model's own sharding plan, queried
+process only sees its *local* devices in that map. So running **one converter process per
+host** means process `p` is told precisely the slices its 4 chips need — and nothing about
+any other host's slices. That is the entire trick: the model's own sharding plan, queried
 per-host, *is* the work allocation.
 
 ```python
@@ -96,11 +96,11 @@ for leaf, (global_shape, _dtype) in shapes.items():
         per_dev_slices[(leaf, local_devs.index(dev))] = _normalize_idx(idx, global_shape)
 ```
 
-One wrinkle worth calling out, because it bit me: `addressable_devices_indices_map`
-returns `slice(None, None, None)` for axes that are **fully replicated** across the mesh
-(e.g. the hidden dimension of a tensor that's only sharded along experts). Downstream I
-need concrete `[start, stop)` bounds to size the output files, so every index gets
-normalized first:
+One wrinkle is worth calling out, because it is easy to miss:
+`addressable_devices_indices_map` returns `slice(None, None, None)` for axes that are
+**fully replicated** across the mesh (e.g. the hidden dimension of a tensor that's only
+sharded along experts). Downstream code needs concrete `[start, stop)` bounds to size the
+output files, so every index gets normalized first:
 
 ```python
 def _normalize_idx(idx, global_shape):
@@ -117,9 +117,9 @@ def _normalize_idx(idx, global_shape):
 
 ## Downloading only what this host needs
 
-Knowing the per-device slices, I can compute this host's **expert range** directly from
-the MoE shardings — the experts are sharded along the `expert` mesh axis, so each host
-owns a contiguous band of the 256 experts:
+From the per-device slices, this host's **expert range** follows directly from the MoE
+shardings — the experts are sharded along the `expert` mesh axis, so each host owns a
+contiguous band of the 256 experts:
 
 ```python
 expert_ranges = []
@@ -132,11 +132,10 @@ host_expert_hi = max(r[1] for r in expert_ranges)
 # e.g. "expert range [128, 144) (host owns 16 of 256)"
 ```
 
-That range tells me which HuggingFace safetensors files actually matter to this host. The
-download loop is **streaming**: it fetches a file only right before the layer that needs
-it, and `unlink()`s it the moment its last layer has been processed. The MoE weights
-arrive as FP8 with block scales, so each tensor is dequantized to bf16 on CPU as it's
-read:
+That range determines which HuggingFace safetensors files actually matter to this host. The
+download loop is **streaming**: it fetches a file only right before the layer that needs it,
+and `unlink()`s it the moment its last layer has been processed. The MoE weights arrive as
+FP8 with block scales, so each tensor is dequantized to bf16 on CPU as it's read:
 
 ```python
 def _block_dequant_to_bf16(x, s, block=128):
@@ -157,10 +156,10 @@ difference between "fits comfortably" and "OOMs the scratch FS."
 
 ## Writing one `.npy` per (leaf, device)
 
-For each parameter leaf and each of the host's 4 devices, I write a single `.npy` file
+For each parameter leaf and each of the host's 4 devices, a single `.npy` file is written,
 sized exactly to that device's slice. Layered weights (the per-layer attention and MoE
-tensors) are filled in layer-by-layer as each layer's HF file streams in, so the full
-global tensor is never assembled in memory:
+tensors) are filled in layer-by-layer as each layer's HF file streams in, so the full global
+tensor is never assembled in memory:
 
 ```python
 def write_layer_slice(arrs, per_dev_slices, leaf, L, source, local_devs):
@@ -179,18 +178,18 @@ def write_layer_slice(arrs, per_dev_slices, leaf, L, source, local_devs):
         tgt[tgt_idx] = source[src_idx]     # write just this layer's slab
 ```
 
-Each host then writes a `manifest.p{proc_idx}.json` recording the global shapes, dtype,
-and the list of shard files it produced. After a clean run on v5e-64, `du -sh` on a
-host's output directory reads **~27–30 GB**. Sixteen of those is ~432 GB across the pod —
-versus 7.4 TB to replicate. The same physical bytes that would have been copied 16 times
-are instead partitioned once.
+Each host then writes a `manifest.p{proc_idx}.json` recording the global shapes, dtype, and
+the list of shard files it produced. After a clean run on v5e-64, `du -sh` on a host's output
+directory reads **~27–30 GB**. Sixteen of those is ~432 GB across the pod — versus 7.4 TB to
+replicate. The same physical bytes that would have been copied 16 times are instead
+partitioned once.
 
 ## The decode side: rebuilding a global array from local shards
 
-At decode time, the loader detects which layout it's looking at — a single
-`manifest.json` (replicated) or per-host `manifest.p*.json` (distributed) — and for the
-distributed case rebuilds each parameter as a globally-sharded `jax.Array` from its local
-per-device `.npy` files:
+At decode time, the loader detects which layout it's looking at — a single `manifest.json`
+(replicated) or per-host `manifest.p*.json` (distributed) — and for the distributed case
+rebuilds each parameter as a globally-sharded `jax.Array` from its local per-device `.npy`
+files:
 
 ```python
 def _detect_distributed(npy_dir):
@@ -208,10 +207,10 @@ built[leaf] = jax.make_array_from_single_device_arrays(
 ```
 
 `make_array_from_single_device_arrays` is the mirror image of
-`addressable_devices_indices_map`: I built the files *from* the sharding plan, and now I
-hand the per-device buffers back *to* the same plan to reconstitute the distributed array.
-No process ever materializes the full 460 GB tree. The whole thing is then patched into
-MaxEngine's parameter-loading path so the rest of the inference stack is none the wiser.
+`addressable_devices_indices_map`: the files were built *from* the sharding plan, and handing
+the per-device buffers back *to* that same plan reconstitutes the distributed array. No
+process ever materializes the full 460 GB tree. The whole thing is then patched into
+MaxEngine's parameter-loading path, so the rest of the inference stack is none the wiser.
 
 ## Does it work?
 
@@ -225,15 +224,15 @@ Yes. On **v5e-64 (europe-west4-b)**, distributed decode produces coherent output
 ```
 
 Per-host conversion takes ~40 minutes (dominated by the sequential HF download at
-~35 s/layer); compile plus first token is ~5 minutes after launch. I also stood up an
-**OpenAI- and Anthropic-compatible FastAPI server** over the `.npy`-backed engine and
-verified all three surfaces through an IAP tunnel (`/v1/completions`,
+~35 s/layer); compile plus first token is ~5 minutes after launch. An **OpenAI- and
+Anthropic-compatible FastAPI server** was also stood up over the `.npy`-backed engine, and
+all three surfaces were verified through an IAP tunnel (`/v1/completions`,
 `/v1/chat/completions`, `/v1/messages`) — 9.1 s cold, 2.5 s warm, with correct token
 accounting and only **8.3 GB/chip** of HBM at batch=1, ctx=2048, int4 KV.
 
 ## Throughput, and a 902× cliff
 
-On **v6e-64**, with proper sparse MoE routing, the model is fast. The peak from my sweep
+On **v6e-64**, with proper sparse MoE routing, the model is fast. The peak from the sweep
 (verified in the run's `bench_steps` JSON):
 
 | batch | KV  | target | step p50 | **tok/s (pod)** |
@@ -246,57 +245,55 @@ On **v6e-64**, with proper sparse MoE routing, the model is fast. The peak from 
 
 That `b=96` row is `global_batch_size=6144` across 64 chips at `tok_per_s_chip=104.3`.
 
-The interesting part is what happens on **v5e**. The same model, same code, tops out at
-about **7.4 tok/s** pod-wide — roughly **902× slower** than v6e. That is not a memory
-problem (the sharding already solved that) and it's not raw FLOPs. It's **one missing
-collective**.
+The interesting part is what happens on **v5e**. The same model, same code, tops out at about
+**7.4 tok/s** pod-wide — roughly **902× slower** than v6e. That is not a memory problem (the
+sharding already solved that) and it's not raw FLOPs. It's **one missing collective**.
 
-MaxText's fast MoE path (`megablox` / `sparse_matmul`) ships each token only to its
-top-8 experts using a **ragged all-to-all** over the inter-chip interconnect. v6e
-supports that collective; **v5e does not** — XLA bails with:
+MaxText's fast MoE path (`megablox` / `sparse_matmul`) ships each token only to its top-8
+experts using a **ragged all-to-all** over the inter-chip interconnect. v6e supports that
+collective; **v5e does not** — XLA bails with:
 
 ```
 RET_CHECK failure ... !HasLimitedIciRouting() Ragged all-to-all is <...>
 ```
 
-The only fallback on v5e is `megablox=false sparse_matmul=false capacity_factor=2.0`,
-which routes *every* token to *every* expert in a dense matmul and masks the unused
-outputs. For a 256-expert model, that's a staggering amount of wasted compute — and it's
-the single line responsible for the ~900× gap. The fix is a custom Pallas grouped-GEMM
-kernel that does the gather/scatter on-chip and skips ragged-all-to-all entirely; that's
-scaffolded (with passing correctness tests) but the on-device tuning is a separate story.
+The only fallback on v5e is `megablox=false sparse_matmul=false capacity_factor=2.0`, which
+routes *every* token to *every* expert in a dense matmul and masks the unused outputs. For a
+256-expert model, that is a staggering amount of wasted compute — and it's the single line
+responsible for the ~900× gap. The fix is a custom Pallas grouped-GEMM kernel that does the
+gather/scatter on-chip and skips ragged-all-to-all entirely; that's scaffolded (with passing
+correctness tests) but the on-device tuning is a separate story.
 
 ## What broke along the way
 
-- **Manifest idempotency.** Conversion is long and TPUs get preempted. Each host's first
-  act is to check whether its `manifest.p{idx}.json` and every expected `.npy` already
-  exist, and skip the work if so. The streaming-convert logs show several FAIL→RUN cycles
-  before the run that reached `layers: 100%` — the idempotency check is what made
-  re-launching cheap instead of a 40-minute restart.
+- **Manifest idempotency.** Conversion is long and TPUs get preempted. Each host's first act
+  is to check whether its `manifest.p{idx}.json` and every expected `.npy` already exist, and
+  skip the work if so. The streaming-convert logs show several FAIL→RUN cycles before the run
+  that reached `layers: 100%` — the idempotency check is what made re-launching cheap instead
+  of a 40-minute restart.
 - **Handle cache vs. dtmpfs pages.** Holding open safetensors file handles kept unlinked
-  files' pages pinned in the RAM-backed FS, quietly eating the headroom the streaming was
-  supposed to buy. The fix was to always release the handle cache after each window so
-  the `unlink()` actually frees memory.
+  files' pages pinned in the RAM-backed FS, quietly eating the headroom that streaming was
+  supposed to buy. The fix was to always release the handle cache after each window so the
+  `unlink()` actually frees memory.
 - **Sharding match is load-bearing.** The converter must be launched with the *same*
   `ici_tensor_parallelism=8 ici_expert_parallelism=8` as decode. If they differ, the
-  `addressable_devices_indices_map` slices won't line up with what the decode engine
-  expects, and you get a shape mismatch on load — after a 40-minute conversion. Passing
-  the mesh args through to both sides is non-negotiable.
+  `addressable_devices_indices_map` slices won't line up with what the decode engine expects,
+  and the result is a shape mismatch on load — after a 40-minute conversion. Passing the mesh
+  args through to both sides is non-negotiable.
 
 ## Takeaways
 
-The core idea generalizes well beyond this one model: **don't fight the framework's
-sharding plan — query it, and let it tell you the work partition.**
-`addressable_devices_indices_map` on the way out and
-`make_array_from_single_device_arrays` on the way back are a clean, symmetric pair for
-turning "the runtime knows how to shard this" into "every host persists only its share."
-Combined with fetch-then-drop streaming from the source, a 230B model that doesn't fit on
-any single host becomes ~27 GB of local state per host, with zero host-to-host or
-cross-region traffic.
+The core idea generalizes well beyond this one model: **don't fight the framework's sharding
+plan — query it, and let it tell you the work partition.**
+`addressable_devices_indices_map` on the way out and `make_array_from_single_device_arrays` on
+the way back are a clean, symmetric pair for turning "the runtime knows how to shard this"
+into "every host persists only its share." Combined with fetch-then-drop streaming from the
+source, a 230B model that doesn't fit on any single host becomes ~27 GB of local state per
+host, with zero host-to-host or cross-region traffic.
 
-And the v5e cliff is a good reminder that on TPU, the bottleneck is often not memory or
-FLOPs but **which collectives your hardware generation actually implements**. A model can
-*fit* perfectly and still run 900× too slow because one all-to-all isn't there.
+And the v5e cliff is a good reminder that on TPU, the bottleneck is often not memory or FLOPs
+but **which collectives a given hardware generation actually implements**. A model can *fit*
+perfectly and still run 900× too slow because one all-to-all isn't there.
 
 ---
 

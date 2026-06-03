@@ -1,0 +1,106 @@
+{
+  "generated": "2026-05-31",
+  "voice": "neutral",
+  "note": "Each post is portable Markdown with YAML frontmatter (title, subtitle, date, tags, status). The `status` field marks how grounded the work is: validated > shipped > real-result > partial > partial-poc. Drop these into any static-site generator, or render from this manifest.",
+  "posts": [
+    {
+      "slug": "minimax-m2.7-zero-egress-sharding",
+      "file": "minimax-m2.7-zero-egress-sharding.md",
+      "title": "Running a 230B model on a pod that can't hold it",
+      "subtitle": "Zero-egress, host-distributed checkpoint sharding for MiniMax-M2.7 on TPU",
+      "date": "2026-05-31",
+      "tags": ["tpu", "jax", "moe", "inference", "maxtext", "distributed-systems"],
+      "status": "validated",
+      "theme": "TPU inference & model bring-up",
+      "summary": "Sharding a 460 GB MoE so each TPU host stores only ~27 GB of it, by querying the engine's own per-device sharding plan. 6,678 tok/s on v6e, and a 902x v5e cliff from one missing collective."
+    },
+    {
+      "slug": "minimax-m2.5-tpu-perf-archaeology",
+      "file": "minimax-m2.5-tpu-perf-archaeology.md",
+      "title": "A 21x bandwidth gap hiding in one dynamic_slice",
+      "subtitle": "Chasing the real decode throughput ceiling of a 229B MoE on TPU v5e and v6e",
+      "date": "2026-05-31",
+      "tags": ["tpu", "jax", "xla", "moe", "inference", "performance", "maxtext"],
+      "status": "validated",
+      "theme": "TPU inference & model bring-up",
+      "summary": "Why a decode loop ran at ~80 GB/s against an 1,800 GB/s ceiling, why scan=False beats scan=True, and why TPU throughput is quantized in batch size. Ceiling: 6,792 tok/s on v6e."
+    },
+    {
+      "slug": "gemma4-31b-compile-vs-preemption",
+      "file": "gemma4-31b-compile-vs-preemption.md",
+      "title": "When a model runs fine but won't serve: compile time vs. the preemption window",
+      "subtitle": "Gemma 4 31B decodes correctly on TPU in seconds, and never comes up as an API server on spot capacity",
+      "date": "2026-05-31",
+      "tags": ["tpu", "jax", "xla", "inference", "serving", "maxtext"],
+      "status": "partial",
+      "theme": "TPU inference & model bring-up",
+      "summary": "A correct model that decodes in seconds still can't be served, because a 40-minute serving compile never finishes inside a preemptible TPU's window. Compile time as a first-class deployment constraint."
+    },
+    {
+      "slug": "sae-94-percent-and-the-collapse",
+      "file": "sae-94-percent-and-the-collapse.md",
+      "title": "94.6% explained variance, then -288%: training SAEs that don't quietly die",
+      "subtitle": "Sparse autoencoders on 2.8B tokens of TPU activations, and the one flag that decided success",
+      "date": "2026-05-31",
+      "tags": ["interpretability", "sae", "jax", "tpu", "mechanistic-interpretability"],
+      "status": "shipped",
+      "theme": "Mechanistic interpretability",
+      "summary": "A JAX/TPU SAE trainer (TopK/JumpReLU/Gated/Vanilla), a dictionary that hit 94.6% explained variance, a run that collapsed to -288%, and the dead-neuron-resampling cutoff that was the whole difference."
+    },
+    {
+      "slug": "arc-trm-autoresearch-loop",
+      "file": "arc-trm-autoresearch-loop.md",
+      "title": "37,292 experiments, 597 ideas: what an autonomous research loop actually does",
+      "subtitle": "Probing a Tiny Recursive Model on ARC - and watching an LLM-driven research loop run out of questions",
+      "date": "2026-05-31",
+      "tags": ["interpretability", "arc-agi", "autonomous-research", "llm-agents", "trm"],
+      "status": "real-result",
+      "theme": "Mechanistic interpretability",
+      "summary": "A real finding (task-ID sensitivity dissociated from halting and correctness; 107/200 tasks never solved) and a cautionary meta-finding (an LLM loop re-asked 597 unique questions 23.5x each on average)."
+    },
+    {
+      "slug": "dtmpfs-distributed-ram-filesystem",
+      "file": "dtmpfs-distributed-ram-filesystem.md",
+      "title": "dtmpfs: a distributed RAM filesystem in Rust",
+      "subtitle": "Mount the same namespace on every host, shard the bytes across the cluster's RAM",
+      "date": "2026-05-31",
+      "tags": ["rust", "distributed-systems", "filesystem", "fuse", "grpc", "tpu"],
+      "status": "shipped",
+      "theme": "Systems & infrastructure",
+      "summary": "A transient distributed tmpfs: rendezvous-hashed 1 MiB blocks across nodes' RAM, close-to-open consistency via a per-inode generation epoch, replica read-failover, and 35 black-box acceptance cases."
+    },
+    {
+      "slug": "tpu-bare-metal-pjrt",
+      "file": "tpu-bare-metal-pjrt.md",
+      "title": "The 40-byte struct: driving a TPU from pure C",
+      "subtitle": "Reverse-engineering the PJRT C API to run kernels on a TPU with no Python, no JAX, no TensorFlow",
+      "date": "2026-05-31",
+      "tags": ["tpu", "pjrt", "c", "systems", "reverse-engineering", "xla"],
+      "status": "validated",
+      "theme": "Systems & infrastructure",
+      "summary": "dlopen libtpu.so, find the function table at the non-obvious offset 40 (a nested version struct), and run SPMD / dev2dev / async / serialized kernels from ~200 lines of C. All 8 examples verified on v4."
+    },
+    {
+      "slug": "rusty-v8-ast-roundtrip-precedence",
+      "file": "rusty-v8-ast-roundtrip-precedence.md",
+      "title": "Round-tripping an AST loses your parentheses",
+      "subtitle": "Transpiling V8 from C++ to Rust through Clang, and the precedence bugs that live in the gap between tree and text",
+      "date": "2026-05-31",
+      "tags": ["compilers", "clang", "rust", "transpiler", "ast", "v8"],
+      "status": "partial-poc",
+      "theme": "Tools & experiments",
+      "summary": "A Clang-AST C++->Rust transpiler for V8 (49 crates, 1,206 files emitted) and the lesson that AST->source must re-derive the parentheses the parser threw away - or silently change `!(x >= 1)` into `(!x) >= 1`."
+    },
+    {
+      "slug": "autoresearch-tpu-val-bpb",
+      "file": "autoresearch-tpu-val-bpb.md",
+      "title": "Porting an autonomous training-optimization loop to TPU",
+      "subtitle": "How a not-fusing-two-jit-calls decision and a bigger batch moved val_bpb from 1.136 to 1.115",
+      "date": "2026-05-31",
+      "tags": ["jax", "flax-nnx", "tpu", "training", "performance", "autonomous-research"],
+      "status": "validated",
+      "theme": "Tools & experiments",
+      "summary": "An autonomous train-edit-measure loop on TPU v4-8. The wins: a bigger batch that deleted gradient accumulation, remat to fit it, and NOT fusing the optimizer into the step (the JIT boundary is a memory-release boundary)."
+    }
+  ]
+}
