@@ -135,16 +135,6 @@ is not the *last* run. An exploration loop deliberately probes past the optimum 
 and 12 to confirm they were worse — so you read the whole trajectory to find the winner, you don't
 just grab the endpoint. A loop that always ended on its best configuration wouldn't be exploring.
 
-## Reflection: what the loop is and isn't good at
-
-This loop is good at the things a patient, tireless engineer is good at: sweeping a knob, running the
-fixed protocol honestly, and reporting kept/rejected with the numbers attached. It found a real,
-defensible local optimum (depth 8, batch 64, remat, unfused optimizer) and produced a clean account
-of *why* each change helped. What it doesn't do is invent a new architecture or question the metric —
-it optimizes within the design space it's given. That's not a criticism; it's the right division of
-labor. The human picks the search space and the ruler; the loop searches it exhaustively and
-honestly.
-
 ## What the loop is and isn't good at
 
 This loop is good at exactly the things a patient, tireless engineer is good at: sweeping a knob,
